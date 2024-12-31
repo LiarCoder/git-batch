@@ -1,0 +1,24 @@
+{
+  "name": "git-batch",
+  "version": "1.0.0",
+  "description": "一个命令行工具，用于批量删除本地代码仓库中的指定分支。",
+  "main": "src/index.js",
+  "bin": {
+    "git-batch": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node ./bin/cli.js"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "inquirer": "^8.2.0"
+  },
+  "keywords": [
+    "git",
+    "cli",
+    "branch",
+    "delete"
+  ],
+  "author": "liaw",
+  "license": "MIT"
+}
