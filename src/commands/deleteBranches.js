@@ -1,58 +1,77 @@
-const { execSync } = require('child_process');
-const { promptUser } = require('../utils/prompt');
+const { execSync } = require("child_process");
+const inquirer = require("inquirer");
+const chalk = require("chalk");
+const ora = require("ora");
+const { confirmAction, promptCheckbox } = require("../utils/interactive");
 
-function getBranches(repoPath, remoteOnly) {
-    const command = remoteOnly ? 'git branch -r' : 'git branch';
-    const branches = execSync(command, { cwd: repoPath }).toString().split('\n').map(branch => branch.trim()).filter(branch => branch);
-    return branches;
-}
+const BRANCH_IGNORE_PATTERNS = ["* master", "* main", "HEAD ->"];
 
-async function deleteBranches(repoPath, remoteOnly) {
-    const branches = getBranches(repoPath, remoteOnly);
-    const selectedBranches = await promptUser(branches);
-        
-    if (selectedBranches.length === 0) {
-        console.log('没有选择任何分支。');
-        return;
-    }
+module.exports = (program) => {
+  program
+    .command("branches")
+    .description("批量删除分支")
+    .option("-r, --remote", "包含远程分支")
+    .option("-l, --local", "仅本地分支")
+    .argument("[repoPath]", "仓库路径", process.cwd())
+    .action(async (repoPath, options) => {
+      const spinner = ora("正在获取分支信息...").start();
 
-    console.log('您选择删除以下分支:');
-    selectedBranches.forEach(branch => console.log(`- ${branch}`));
+      try {
+        const branches = getBranches(repoPath, options);
+        spinner.stop();
 
-    const confirmation = await promptUser(['确认删除', '取消']);
-    
-    if (confirmation.includes('确认删除')) {
-        for (const branch of selectedBranches) {
-            const remoteBranch = branch.replace('* ', '').trim();
-            if (remoteOnly) {
-                try {
-                    execSync(`git push origin --delete ${remoteBranch}`, { cwd: repoPath });
-                    console.log(`成功删除远程分支: ${remoteBranch}`);
-                } catch (error) {
-                    console.error(`删除远程分支 ${remoteBranch} 失败: ${error.message}`);
-                }
-            } else {
-                try {
-                    execSync(`git branch -d ${branch}`, { cwd: repoPath });
-                    console.log(`成功删除本地分支: ${branch}`);
-                    
-                    const deleteRemote = await promptUser(['删除远程分支', '保留远程分支']);
-                    if (deleteRemote.includes('删除远程分支')) {
-                        try {
-                            execSync(`git push origin --delete ${remoteBranch}`, { cwd: repoPath });
-                            console.log(`成功删除远程分支: ${remoteBranch}`);
-                        } catch (error) {
-                            console.error(`删除远程分支 ${remoteBranch} 失败: ${error.message}`);
-                        }
-                    }
-                } catch (error) {
-                    console.error(`删除分支 ${branch} 失败: ${error.message}`);
-                }
-            }
+        if (branches.length === 0) {
+          console.log(chalk.yellow("没有找到可删除的分支"));
+          return;
         }
-    } else {
-        console.log('删除操作已取消。');
-    }
+
+        const selected = await promptCheckbox("请选择要删除的分支:", branches);
+        if (selected.length === 0) return;
+
+        const confirm = await confirmAction(
+          `即将删除以下分支：\n${selected.map((b) => `  • ${b}`).join("\n")}`
+        );
+
+        if (confirm) {
+          await deleteBranches(repoPath, selected, options);
+        }
+      } catch (error) {
+        spinner.fail("操作失败");
+        console.error(chalk.red(`错误信息: ${error.message}`));
+      }
+    });
+};
+
+function getBranches(repoPath, { remote, local }) {
+  const command = remote
+    ? "git branch -r"
+    : local
+    ? "git branch"
+    : "git branch -a";
+  return execSync(command, { cwd: repoPath })
+    .toString()
+    .split("\n")
+    .map((b) => b.trim().replace(/^remotes\/origin\//, ""))
+    .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)));
 }
 
-module.exports = { deleteBranches };
+async function deleteBranches(repoPath, branches, options) {
+  const deleteSpinner = ora("正在删除分支...").start();
+
+  try {
+    const deletePromises = branches.map((branch) => {
+      const commands = [];
+      if (!options.remote) commands.push(`git branch -D ${branch}`);
+      if (options.remote) commands.push(`git push origin --delete ${branch}`);
+      return Promise.all(
+        commands.map((cmd) => execSync(cmd, { cwd: repoPath }))
+      );
+    });
+
+    await Promise.all(deletePromises);
+    deleteSpinner.succeed(`成功删除 ${branches.length} 个分支`);
+  } catch (error) {
+    deleteSpinner.fail("删除过程中发生错误");
+    throw error;
+  }
+}

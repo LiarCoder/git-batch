@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "commander": "^13.0.0",
-    "inquirer": "^8.2.0"
+    "inquirer": "^8.2.0",
+    "chalk": "^4.1.2",
+    "ora": "^5.4.1"
   },
   "keywords": [
     "git",
