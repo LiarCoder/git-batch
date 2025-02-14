@@ -4,6 +4,7 @@
   "description": "一个命令行工具，用于批量删除本地代码仓库中的指定分支。",
   "main": "src/index.js",
   "bin": {
+    "gb": "./bin/cli.js",
     "git-batch": "./bin/cli.js"
   },
   "scripts": {
