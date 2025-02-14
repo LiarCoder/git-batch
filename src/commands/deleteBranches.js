@@ -25,11 +25,23 @@ module.exports = (program) => {
           return;
         }
 
-        const selected = await promptCheckbox("请选择要删除的分支:", branches);
+        const branchChoices = branches.map((b, index) => ({
+          name: `${b.type} ${(index + 1).toString().padStart(3, "0")} ${
+            b.name
+          }`,
+          value: b,
+        }));
+
+        const selected = await promptCheckbox(
+          "请选择要删除的分支:",
+          branchChoices
+        );
         if (selected.length === 0) return;
 
         const confirm = await confirmAction(
-          `即将删除以下分支：\n${selected.map((b) => `  • ${b}`).join("\n")}`
+          `即将删除以下分支：\n${selected
+            .map((b) => `  • ${b.name}`)
+            .join("\n")}`
         );
 
         if (confirm) {
@@ -43,16 +55,39 @@ module.exports = (program) => {
 };
 
 function getBranches(repoPath, { remote, local }) {
-  const command = remote
-    ? "git branch -r"
-    : local
-    ? "git branch"
-    : "git branch -a";
-  return execSync(command, { cwd: repoPath })
+  const localBranches = execSync("git branch", { cwd: repoPath })
+    .toString()
+    .split("\n")
+    .map((b) => b.trim())
+    .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)))
+    .map((b) => ({ name: b.replace("* ", ""), type: "l" }));
+
+  const remoteBranches = execSync("git branch -r", { cwd: repoPath })
     .toString()
     .split("\n")
     .map((b) => b.trim().replace(/^remotes\/origin\//, ""))
-    .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)));
+    .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)))
+    .map((b) => ({ name: b, type: "r" }));
+
+  const allBranches = [...localBranches, ...remoteBranches];
+  const unique = Array.from(new Set(allBranches.map((b) => b.name))).map(
+    (name) => {
+      const types = allBranches
+        .filter((b) => b.name === name)
+        .map((b) => b.type);
+      return {
+        name,
+        type: types.includes("l") ? "l" : "r",
+        raw: types.includes("l") ? name : `origin/${name}`,
+      };
+    }
+  );
+
+  return unique.filter((b) => {
+    if (remote) return b.type === "r";
+    if (local) return b.type === "l";
+    return true;
+  });
 }
 
 async function deleteBranches(repoPath, branches, options) {
@@ -61,8 +96,9 @@ async function deleteBranches(repoPath, branches, options) {
   try {
     const deletePromises = branches.map((branch) => {
       const commands = [];
-      if (!options.remote) commands.push(`git branch -D ${branch}`);
-      if (options.remote) commands.push(`git push origin --delete ${branch}`);
+      if (!options.remote) commands.push(`git branch -D ${branch.raw}`);
+      if (options.remote)
+        commands.push(`git push origin --delete ${branch.raw}`);
       return Promise.all(
         commands.map((cmd) => execSync(cmd, { cwd: repoPath }))
       );

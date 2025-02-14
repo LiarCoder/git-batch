@@ -7,7 +7,10 @@ exports.promptCheckbox = async (message, choices) => {
       type: "checkbox",
       name: "selected",
       message,
-      choices,
+      choices: choices.map((c) => ({
+        name: c.name,
+        value: c.value.raw, // 存储原始分支名称
+      })),
       pageSize: Math.min(20, choices.length),
     },
   ]);
