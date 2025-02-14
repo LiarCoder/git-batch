@@ -12,6 +12,7 @@ exports.promptCheckbox = async (message, choices) => {
         value: c.value.raw, // 存储原始分支名称
       })),
       pageSize: Math.min(20, choices.length),
+      loop: false,
     },
   ]);
   return selected;
