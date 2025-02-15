@@ -26,8 +26,11 @@ module.exports = (program) => {
         }
 
         const branchChoices = branches.map((b, index) => {
+          const branchInfo = formatBranchDisplayText(b, index);
+          const commitInfo = getCommitInfo(repoPath, b.name);
+
           return {
-            name: formatBranchDisplayText(b, index),
+            name: `${branchInfo}  ${commitInfo}`,
             value: b,
           };
         });
@@ -56,8 +59,8 @@ module.exports = (program) => {
 
 function formatBranchDisplayText(branch, index) {
   const branchIndex = (index + 1).toString().padStart(3, "0");
-  const branchName = branch.isCurrent 
-    ? `${chalk.green('*')}${branch.name}` 
+  const branchName = branch.isCurrent
+    ? `${chalk.green("*")}${branch.name}`
     : ` ${branch.name}`;
 
   const branchFormats = {
@@ -135,5 +138,19 @@ async function deleteBranches(repoPath, branches, options) {
   } catch (error) {
     deleteSpinner.fail("删除过程中发生错误");
     throw error;
+  }
+}
+
+function getCommitInfo(repoPath, branchName) {
+  try {
+    const format = "%H|%s|%ad|%an";
+    const command = `git log "${branchName}" -1 --pretty=format:"${format}" --date=format:%Y-%m-%d-%H:%M:%S`;
+    const output = execSync(command, { cwd: repoPath }).toString().trim();
+    const [hash, message, date, author] = output.split("|");
+    return chalk.gray(
+      `[${hash.slice(0, 7)} - ${message} (${date}) <${author}>]`
+    );
+  } catch (error) {
+    return chalk.gray(" [无提交信息]");
   }
 }
