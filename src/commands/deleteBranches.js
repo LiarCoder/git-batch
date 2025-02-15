@@ -25,12 +25,12 @@ module.exports = (program) => {
           return;
         }
 
-        const branchChoices = branches.map((b, index) => ({
-          name: `${b.type} ${(index + 1).toString().padStart(3, "0")} ${
-            b.name
-          }`,
-          value: b,
-        }));
+        const branchChoices = branches.map((b, index) => {
+          return {
+            name: formatBranchDisplayText(b, index),
+            value: b,
+          };
+        });
 
         const selected = await promptCheckbox(
           "请选择要删除的分支:",
@@ -54,13 +54,38 @@ module.exports = (program) => {
     });
 };
 
+function formatBranchDisplayText(branch, index) {
+  const branchIndex = (index + 1).toString().padStart(3, "0");
+  const branchName = branch.isCurrent 
+    ? `${chalk.green('*')}${branch.name}` 
+    : ` ${branch.name}`;
+
+  const branchFormats = {
+    local: `l ${branchIndex} ${branchName}`,
+    remote: `${chalk.red(`r ${branchIndex}`)} ${branchName}`,
+    current: `${chalk.green(`l ${branchIndex}`)} ${branchName}`,
+  };
+
+  if (branch.isCurrent) {
+    return branchFormats.current;
+  } else if (branch.type === "r") {
+    return branchFormats.remote;
+  } else if (branch.type === "l") {
+    return branchFormats.local;
+  }
+}
+
 function getBranches(repoPath, { remote, local }) {
   const localBranches = execSync("git branch", { cwd: repoPath })
     .toString()
     .split("\n")
     .map((b) => b.trim())
     .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)))
-    .map((b) => ({ name: b.replace("* ", ""), type: "l" }));
+    .map((b) => ({
+      name: b.replace("* ", ""),
+      type: "l",
+      isCurrent: b.startsWith("*"),
+    }));
 
   const remoteBranches = execSync("git branch -r", { cwd: repoPath })
     .toString()
@@ -72,13 +97,14 @@ function getBranches(repoPath, { remote, local }) {
   const allBranches = [...localBranches, ...remoteBranches];
   const unique = Array.from(new Set(allBranches.map((b) => b.name))).map(
     (name) => {
-      const types = allBranches
-        .filter((b) => b.name === name)
-        .map((b) => b.type);
+      const matchedBranches = allBranches.filter((b) => b.name === name);
       return {
         name,
-        type: types.includes("l") ? "l" : "r",
-        raw: types.includes("l") ? name : `origin/${name}`,
+        type: matchedBranches.some((b) => b.type === "l") ? "l" : "r",
+        isCurrent: matchedBranches.some((b) => b.isCurrent),
+        raw: matchedBranches.some((b) => b.type === "l")
+          ? name
+          : `origin/${name}`,
       };
     }
   );
