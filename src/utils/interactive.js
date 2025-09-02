@@ -9,7 +9,7 @@ exports.promptCheckbox = async (message, choices) => {
       message,
       choices: choices.map((c) => ({
         name: c.name,
-        value: c.value.raw, // 存储原始分支名称
+        value: c.value, // 存储分支对象
       })),
       pageSize: Math.min(20, choices.length),
       loop: false,

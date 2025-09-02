@@ -27,7 +27,9 @@ module.exports = (program) => {
 
         const branchChoices = branches.map((b, index) => {
           const branchInfo = formatBranchDisplayText(b, index);
-          const commitInfo = getCommitInfo(repoPath, b.name);
+          // 对于远程分支，使用完整的远程分支名查询提交信息
+          const branchRefName = b.type === "r" ? `origin/${b.name}` : b.name;
+          const commitInfo = getCommitInfo(repoPath, branchRefName);
 
           return {
             name: `${branchInfo}  ${commitInfo}`,
@@ -93,44 +95,69 @@ function getBranches(repoPath, { remote, local }) {
   const remoteBranches = execSync("git branch -r", { cwd: repoPath })
     .toString()
     .split("\n")
-    .map((b) => b.trim().replace(/^remotes\/origin\//, ""))
+    .map((b) => b.trim())
     .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)))
-    .map((b) => ({ name: b, type: "r" }));
-
-  const allBranches = [...localBranches, ...remoteBranches];
-  const unique = Array.from(new Set(allBranches.map((b) => b.name))).map(
-    (name) => {
-      const matchedBranches = allBranches.filter((b) => b.name === name);
+    .filter((b) => !b.includes("HEAD ->")) // 过滤掉 HEAD 指针
+    .map((b) => {
+      // 保留完整的远程分支名，如 "origin/feature-branch"
+      const cleanName = b.replace(/^remotes\//, "");
+      const branchName = cleanName.replace(/^origin\//, "");
       return {
-        name,
-        type: matchedBranches.some((b) => b.type === "l") ? "l" : "r",
-        isCurrent: matchedBranches.some((b) => b.isCurrent),
-        raw: matchedBranches.some((b) => b.type === "l")
-          ? name
-          : `origin/${name}`,
+        name: branchName,
+        type: "r",
+        fullRemoteName: cleanName,
       };
-    }
-  );
+    });
 
-  return unique.filter((b) => {
-    if (remote) return b.type === "r";
-    if (local) return b.type === "l";
-    return true;
-  });
+  // 不进行去重合并，保持本地和远程分支分离
+  let allBranches = [];
+
+  if (!remote) {
+    // 包含本地分支
+    allBranches = allBranches.concat(localBranches);
+  }
+
+  if (!local) {
+    // 包含远程分支
+    allBranches = allBranches.concat(remoteBranches);
+  }
+
+  if (!remote && !local) {
+    // 默认包含所有分支
+    allBranches = [...localBranches, ...remoteBranches];
+  }
+
+  return allBranches;
 }
 
 async function deleteBranches(repoPath, branches, options) {
   const deleteSpinner = ora("正在删除分支...").start();
 
   try {
-    const deletePromises = branches.map((branch) => {
+    // 分别处理本地和远程分支的删除
+    const deletePromises = branches.map(async (branch) => {
       const commands = [];
-      if (!options.remote) commands.push(`git branch -D ${branch.raw}`);
-      if (options.remote)
-        commands.push(`git push origin --delete ${branch.raw}`);
-      return Promise.all(
-        commands.map((cmd) => execSync(cmd, { cwd: repoPath }))
-      );
+
+      // 根据分支类型和用户选项决定删除命令
+      if (branch.type === "l") {
+        // 删除本地分支
+        commands.push(`git branch -D ${branch.name}`);
+      } else if (branch.type === "r") {
+        // 删除远程分支
+        commands.push(`git push origin --delete ${branch.name}`);
+      }
+
+      // 执行删除命令
+      for (const cmd of commands) {
+        try {
+          execSync(cmd, { cwd: repoPath, stdio: "pipe" });
+        } catch (error) {
+          // 如果是远程分支不存在的错误，可以忽略
+          if (!error.message.includes("does not exist")) {
+            throw error;
+          }
+        }
+      }
     });
 
     await Promise.all(deletePromises);
@@ -145,12 +172,19 @@ function getCommitInfo(repoPath, branchName) {
   try {
     const format = "%H|%s|%ad|%an";
     const command = `git log "${branchName}" -1 --pretty=format:"${format}" --date=format:%Y-%m-%d-%H:%M:%S`;
-    const output = execSync(command, { cwd: repoPath }).toString().trim();
+    const output = execSync(command, {
+      cwd: repoPath,
+      stdio: "pipe", // 静默执行，避免错误信息显示在控制台
+    })
+      .toString()
+      .trim();
+
     const [hash, message, date, author] = output.split("|");
     return chalk.gray(
       `[${hash.slice(0, 7)} - ${message} (${date}) <${author}>]`
     );
   } catch (error) {
+    // 静默处理错误，不显示在控制台
     return chalk.gray(" [无提交信息]");
   }
 }
