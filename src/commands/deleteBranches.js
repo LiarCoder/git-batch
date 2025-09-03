@@ -1,10 +1,7 @@
-const { execSync } = require("child_process");
-const inquirer = require("inquirer");
 const chalk = require("chalk");
 const ora = require("ora");
 const { confirmAction, promptCheckbox } = require("../utils/interactive");
-
-const BRANCH_IGNORE_PATTERNS = ["* master", "* main", "HEAD ->"];
+const Git = require("../utils/git");
 
 module.exports = (program) => {
   program
@@ -14,10 +11,17 @@ module.exports = (program) => {
     .option("-l, --local", "仅本地分支")
     .argument("[repoPath]", "仓库路径", process.cwd())
     .action(async (repoPath, options) => {
+      const git = new Git(repoPath);
       const spinner = ora("正在获取分支信息...").start();
 
       try {
-        const branches = getBranches(repoPath, options);
+        // 验证是否为有效的 Git 仓库
+        if (!git.isValidRepository()) {
+          spinner.fail("错误：指定路径不是有效的 Git 仓库");
+          return;
+        }
+
+        const branches = git.getBranches(options);
         spinner.stop();
 
         if (branches.length === 0) {
@@ -29,10 +33,11 @@ module.exports = (program) => {
           const branchInfo = formatBranchDisplayText(b, index);
           // 对于远程分支，使用完整的远程分支名查询提交信息
           const branchRefName = b.type === "r" ? `origin/${b.name}` : b.name;
-          const commitInfo = getCommitInfo(repoPath, branchRefName);
+          const commitInfo = git.getCommitInfo(branchRefName);
+          const commitDisplay = formatCommitInfo(commitInfo);
 
           return {
-            name: `${branchInfo}  ${commitInfo}`,
+            name: `${branchInfo}  ${commitDisplay}`,
             value: b,
           };
         });
@@ -50,7 +55,7 @@ module.exports = (program) => {
         );
 
         if (confirm) {
-          await deleteBranches(repoPath, selected, options);
+          await deleteBranchesWithGit(git, selected);
         }
       } catch (error) {
         spinner.fail("操作失败");
@@ -80,111 +85,44 @@ function formatBranchDisplayText(branch, index) {
   }
 }
 
-function getBranches(repoPath, { remote, local }) {
-  const localBranches = execSync("git branch", { cwd: repoPath })
-    .toString()
-    .split("\n")
-    .map((b) => b.trim())
-    .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)))
-    .map((b) => ({
-      name: b.replace("* ", ""),
-      type: "l",
-      isCurrent: b.startsWith("*"),
-    }));
-
-  const remoteBranches = execSync("git branch -r", { cwd: repoPath })
-    .toString()
-    .split("\n")
-    .map((b) => b.trim())
-    .filter((b) => b && !BRANCH_IGNORE_PATTERNS.some((p) => b.includes(p)))
-    .filter((b) => !b.includes("HEAD ->")) // 过滤掉 HEAD 指针
-    .map((b) => {
-      // 保留完整的远程分支名，如 "origin/feature-branch"
-      const cleanName = b.replace(/^remotes\//, "");
-      const branchName = cleanName.replace(/^origin\//, "");
-      return {
-        name: branchName,
-        type: "r",
-        fullRemoteName: cleanName,
-      };
-    });
-
-  // 不进行去重合并，保持本地和远程分支分离
-  let allBranches = [];
-
-  if (!remote) {
-    // 包含本地分支
-    allBranches = allBranches.concat(localBranches);
+/**
+ * 格式化提交信息显示
+ * @param {Object|null} commitInfo - 提交信息对象
+ * @returns {string} 格式化后的提交信息字符串
+ */
+function formatCommitInfo(commitInfo) {
+  if (!commitInfo) {
+    return chalk.gray(" [无提交信息]");
   }
 
-  if (!local) {
-    // 包含远程分支
-    allBranches = allBranches.concat(remoteBranches);
-  }
-
-  if (!remote && !local) {
-    // 默认包含所有分支
-    allBranches = [...localBranches, ...remoteBranches];
-  }
-
-  return allBranches;
+  const { hash, message, date, author } = commitInfo;
+  return chalk.gray(`[${hash} - ${message} (${date}) <${author}>]`);
 }
 
-async function deleteBranches(repoPath, branches, options) {
+/**
+ * 使用 Git 类删除分支
+ * @param {Git} git - Git 实例
+ * @param {Array} branches - 要删除的分支列表
+ */
+async function deleteBranchesWithGit(git, branches) {
   const deleteSpinner = ora("正在删除分支...").start();
 
   try {
-    // 分别处理本地和远程分支的删除
-    const deletePromises = branches.map(async (branch) => {
-      const commands = [];
+    const results = await git.deleteBranches(branches);
 
-      // 根据分支类型和用户选项决定删除命令
-      if (branch.type === "l") {
-        // 删除本地分支
-        commands.push(`git branch -D ${branch.name}`);
-      } else if (branch.type === "r") {
-        // 删除远程分支
-        commands.push(`git push origin --delete ${branch.name}`);
-      }
-
-      // 执行删除命令
-      for (const cmd of commands) {
-        try {
-          execSync(cmd, { cwd: repoPath, stdio: "pipe" });
-        } catch (error) {
-          // 如果是远程分支不存在的错误，可以忽略
-          if (!error.message.includes("does not exist")) {
-            throw error;
-          }
-        }
-      }
-    });
-
-    await Promise.all(deletePromises);
-    deleteSpinner.succeed(`成功删除 ${branches.length} 个分支`);
+    if (results.failed.length > 0) {
+      deleteSpinner.warn(
+        `删除完成：成功 ${results.success.length} 个，失败 ${results.failed.length} 个`
+      );
+      console.log(chalk.yellow("删除失败的分支："));
+      results.failed.forEach((branch) => {
+        console.log(chalk.yellow(`  • ${branch.name}`));
+      });
+    } else {
+      deleteSpinner.succeed(`成功删除 ${results.success.length} 个分支`);
+    }
   } catch (error) {
     deleteSpinner.fail("删除过程中发生错误");
     throw error;
-  }
-}
-
-function getCommitInfo(repoPath, branchName) {
-  try {
-    const format = "%H|%s|%ad|%an";
-    const command = `git log "${branchName}" -1 --pretty=format:"${format}" --date=format:%Y-%m-%d-%H:%M:%S`;
-    const output = execSync(command, {
-      cwd: repoPath,
-      stdio: "pipe", // 静默执行，避免错误信息显示在控制台
-    })
-      .toString()
-      .trim();
-
-    const [hash, message, date, author] = output.split("|");
-    return chalk.gray(
-      `[${hash.slice(0, 7)} - ${message} (${date}) <${author}>]`
-    );
-  } catch (error) {
-    // 静默处理错误，不显示在控制台
-    return chalk.gray(" [无提交信息]");
   }
 }
